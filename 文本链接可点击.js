@@ -1,11 +1,12 @@
 // ==UserScript==
 // @name         链接可点击
 // @namespace    http://tampermonkey.net/
-// @version      2.1
-// @description  将纯文本链接转换为可点击链接，并通过替换元素的方式，强力清理各大网站的跳转链接。
+// @version      2.8
+// @description  将纯文本链接转换为可点击链接，清理各大网站跳转链接，移除返利追踪参数，CPS返利链接红色背景标记
 // @author       caanyying
 // @match        *://*/*
 // @grant        none
+// @icon         data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='256' height='256' viewBox='0 0 24 24'%3E%3Cpath fill='currentColor' d='M21.92 6.62a1 1 0 0 0-.54-.54A1 1 0 0 0 21 6h-5a1 1 0 0 0 0 2h2.59L13 13.59l-3.29-3.3a1 1 0 0 0-1.42 0l-6 6a1 1 0 0 0 0 1.42a1 1 0 0 0 1.42 0L9 12.41l3.29 3.3a1 1 0 0 0 1.42 0L20 9.41V12a1 1 0 0 0 2 0V7a1 1 0 0 0-.08-.38'/%3E%3C/svg%3E
 // ==/UserScript==
 
 (function() {
@@ -13,6 +14,67 @@
 
     // 用于匹配URL的正则表达式
     const urlRegex = /https?:\/\/[^\s<>"{}|\\^`\[\]]+/gi;
+    // 匹配 CPS路径返利链接 /cps/数字
+    const cpsPathRegex = /\/cps\/\d+($|\?)/i;
+
+    // 常见返利/推广/追踪参数列表，按需增删
+    const TRACK_PARAMS = [
+        'aff',
+        'ref',
+        'referrer',
+        'referral',
+        'refid',
+        'ref_id',
+        'affid',
+        'aff_id',
+        'affiliate',
+        'affiliate_id',
+        'aid',
+        'rid',
+        'rcid',
+        'promo',
+        'promoid',
+        'promo_id',
+        'campaign',
+        'campaign_id',
+        'utm_source',
+        'utm_medium',
+        'utm_campaign',
+        'utm_term',
+        'utm_content',
+        'source',
+        'track',
+        'trackid',
+        'track_id',
+        'clickid',
+        'click_id',
+        'clkid',
+        's1',
+        's2',
+        's3',
+        'tag',
+        'tid',
+        'userid',
+        'u_id'
+    ];
+
+    /**
+     * 工具函数：移除列表内所有追踪返利查询参数
+     * @param {string} urlStr
+     * @returns {string} 清洗后url
+     */
+    function stripTrackParams(urlStr) {
+        try {
+            const urlObj = new URL(urlStr);
+            TRACK_PARAMS.forEach(key => {
+                urlObj.searchParams.delete(key);
+            });
+            return urlObj.toString();
+        } catch (e) {
+            // url解析失败原样返回
+            return urlStr;
+        }
+    }
 
     /**
      * 核心函数：清理并替换跳转链接
@@ -24,9 +86,24 @@
 
         let realUrl = null;
 
+        // ========== 规则0：CPS返利链接 ==========
+        // 分支1：链接文本是URL，优先用文本替换（原有逻辑）
+        if(cpsPathRegex.test(href) && textContent.match(urlRegex)){
+            realUrl = textContent;
+            console.log(`[CPS返利路径] 使用文本URL替换：${href} -> ${realUrl}`);
+        }
+        // 分支2：链接文本不是URL，红色背景标记，控制台告警
+        else if(cpsPathRegex.test(href)){
+            console.warn(`[CPS返利告警] 检测到返利跳转链接，无法自动解析重定向目标：${href}`);
+            // 增加红色背景标记，加一点内边距方便识别
+            linkElement.style.backgroundColor = '#ff4444';
+            linkElement.style.color = '#fff';
+            linkElement.style.padding = '2px 4px';
+            linkElement.style.borderRadius = '3px';
+            return;
+        }
         // 规则1: 处理贴吧、知道等百度系产品的跳转链接
-        // 链接文本通常是真实URL
-        if (textContent.match(urlRegex) && href.includes('jump.bdimg.com')) {
+        else if (textContent.match(urlRegex) && href.includes('jump.bdimg.com')) {
             realUrl = textContent;
         }
         // 规则2: 处理知乎的跳转链接
@@ -54,19 +131,26 @@
             realUrl = textContent;
         }
 
+        // 普通a标签，没有跳转，仅清洗查询追踪参数
+        if (!realUrl) {
+            const cleanedHref = stripTrackParams(href);
+            if (cleanedHref !== href) {
+                linkElement.href = cleanedHref;
+                console.log(`[追踪参数清理] ${href} -> ${cleanedHref}`);
+            }
+            return;
+        }
+
         // 如果找到了真实URL，则创建一个新链接并替换掉旧的
         if (realUrl && realUrl.startsWith('http')) {
-            // 创建一个全新的、干净的 <a> 标签
+            const cleanRealUrl = stripTrackParams(realUrl);
             const newLink = document.createElement('a');
-            newLink.href = realUrl;
-            newLink.textContent = textContent; // 保持原有文本
-            newLink.target = '_blank'; // 在新标签页打开
-            newLink.rel = 'noopener noreferrer'; // 安全属性
-            newLink.style.color = 'blue'; // 保持链接样式
+            newLink.href = cleanRealUrl;
+            newLink.textContent = textContent;
+            newLink.target = '_blank';
+            newLink.rel = 'noopener noreferrer';
 
-            console.log(`[链接清理] 已替换跳转链接: ${href}  ->  ${realUrl}`);
-
-            // 用新链接替换旧链接
+            console.log(`[链接清理] 已替换跳转链接: ${href}  ->  ${cleanRealUrl}`);
             linkElement.parentNode.replaceChild(newLink, linkElement);
         }
     }
@@ -77,7 +161,6 @@
      * @param {Node} node - 开始遍历的节点。
      */
     function walk(node) {
-        // 跳过脚本和样式标签
         if (node.nodeType === Node.ELEMENT_NODE && (node.tagName === 'SCRIPT' || node.tagName === 'STYLE')) {
             return;
         }
@@ -87,7 +170,6 @@
             const next = child.nextSibling;
 
             if (child.nodeType === Node.TEXT_NODE) {
-                // 确保不在 <a> 标签内部处理文本
                 if (!child.parentElement.closest('a')) {
                     replaceTextWithLinks(child);
                 }
@@ -95,7 +177,6 @@
                 if (child.tagName === 'A') {
                     cleanAndReplaceLink(child);
                 } else {
-                    // 递归处理子元素
                     walk(child);
                 }
             }
@@ -119,11 +200,10 @@
                     fragment.appendChild(document.createTextNode(text.slice(lastIndex, index)));
                 }
                 const a = document.createElement('a');
-                a.href = match;
+                a.href = stripTrackParams(match);
                 a.textContent = match;
                 a.target = '_blank';
                 a.rel = 'noopener noreferrer';
-                a.style.color = 'blue';
                 fragment.appendChild(a);
                 lastIndex = index + match.length;
             }
@@ -135,11 +215,8 @@
     }
 
     // --- 初始化和监听 ---
-
-    // 初始处理整个页面
     walk(document.body);
 
-    // 监听DOM变化，以处理动态加载的内容（例如Ajax加载的评论）
     const observer = new MutationObserver(function(mutations) {
         for (const mutation of mutations) {
             for (const node of mutation.addedNodes) {
